@@ -7,15 +7,11 @@
 static const int MIN_GAP = 150;
 // Height of the window that must always keep one lane open (room to dodge).
 static const int WALL_BAND = 250;
-// A new car only spawns if its lane is clear this far from the top.
-static const int SPAWN_GAP = 150;
-// Most cars alive at once.
-static const int MAX_CARS = 5;
+// Number of cars in the fleet (one thread each).
+static const int DESIGN1_CARS = 5;
 // Cars only change lane above this y, so they commit before reaching the player.
 static const int MERGE_ZONE_Y = 250;
-// Ticks between waves: ~20 * 100ms = every 2s.
-static const int WAVE_EVERY = 20;
-// Past this y a car left the screen. A bit below the frontend height (840).
+// Past this y a car left the screen and its thread respawns it.
 static const int OFFSCREEN_Y = 900;
 static const int TICK_MS = 100;
 
@@ -31,12 +27,11 @@ CarManager::~CarManager() {
 void CarManager::seedInitialCars() {
     cars.clear();
     nextCarId = 0;
-    waveCounter = WAVE_EVERY;   // first wave right away
 
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < DESIGN1_CARS; i++) {
         Car car(nextCarId);
         car.setLane(i % NUM_LANES);
-        car.setY(-i * 280);   // well spread so they never start as a wall
+        car.setY(-i * 200);   // well spread so they never start as a wall
         cars.push_back(car);
         nextCarId++;
     }
@@ -141,44 +136,34 @@ void CarManager::stepCarUnlocked(Car& c) {
     }
 }
 
-// ---- wave spawning + cleanup ----
+// Design 1 spawner: pick the lane with the most room at the top and place the
+// car just behind that lane's nearest car (so it never lands on top of one).
+Position CarManager::generateSafeStartPosition() {
+    int bestLane = 0;
+    int bestNearestY = -1;
 
-bool CarManager::laneIsFreeAtTop(int lane) {
-    bool free = true;
-    for (int i = 0; i < (int)cars.size(); i++) {
-        bool sameLane = cars[i].getPosition().lane == lane;
-        bool nearTop = cars[i].getPosition().y < SPAWN_GAP;
-        if (sameLane && nearTop) {
-            free = false;
-        }
-    }
-    return free;
-}
-
-void CarManager::spawnWaveUnlocked() {
-    if ((int)cars.size() < MAX_CARS) {
-        // Spawn in up to 2 lanes, always leaving one open: a wave is never a wall.
-        int openLane = rand() % NUM_LANES;
-        for (int lane = 0; lane < NUM_LANES; lane++) {
-            bool canSpawnHere = (lane != openLane) && laneIsFreeAtTop(lane);
-            if (canSpawnHere) {
-                Car car(nextCarId);
-                car.setLane(lane);
-                cars.push_back(car);
-                nextCarId++;
+    for (int lane = 0; lane < NUM_LANES; lane++) {
+        int nearestY = OFFSCREEN_Y + 1;
+        for (int i = 0; i < (int)cars.size(); i++) {
+            bool sameLane = cars[i].getPosition().lane == lane;
+            bool higherUp = cars[i].getPosition().y < nearestY;
+            if (sameLane && higherUp) {
+                nearestY = cars[i].getPosition().y;
             }
         }
-    }
-}
-
-void CarManager::removeOffscreenCarsUnlocked() {
-    std::vector<Car> keep;
-    for (int i = 0; i < (int)cars.size(); i++) {
-        if (cars[i].getPosition().y <= OFFSCREEN_Y) {
-            keep.push_back(cars[i]);
+        if (nearestY > bestNearestY) {
+            bestNearestY = nearestY;
+            bestLane = lane;
         }
     }
-    cars = keep;
+
+    Position result;
+    result.lane = bestLane;
+    result.y = bestNearestY - MIN_GAP;   // MIN_GAP behind the nearest car
+    if (result.y > 0) {
+        result.y = 0;
+    }
+    return result;
 }
 
 std::vector<Car> CarManager::getCarStates() {
@@ -188,34 +173,39 @@ std::vector<Car> CarManager::getCarStates() {
     return copy;
 }
 
-// ---- design 2: one thread updates every car ----
+// ---- design 1: one thread per car ----
 
 void CarManager::start() {
     running = true;
-    updateThread = std::thread(&CarManager::updateLoop, this);
+    for (int i = 0; i < (int)cars.size(); i++) {
+        carThreads.push_back(std::thread(&CarManager::oneCarLoop, this, i));
+    }
 }
 
 void CarManager::stop() {
     running = false;
-    if (updateThread.joinable()) {
-        updateThread.join();
+    for (int i = 0; i < (int)carThreads.size(); i++) {
+        if (carThreads[i].joinable()) {
+            carThreads[i].join();
+        }
     }
 }
 
-void CarManager::updateLoop() {
+// One per car. `cars` is never resized, so cars[index] stays valid.
+void CarManager::oneCarLoop(int index) {
     while (running) {
         carsMutex.lock();
 
-        for (int i = 0; i < (int)cars.size(); i++) {
-            stepCarUnlocked(cars[i]);
-        }
+        stepCarUnlocked(cars[index]);
 
-        waveCounter++;
-        if (waveCounter >= WAVE_EVERY) {
-            spawnWaveUnlocked();
-            waveCounter = 0;
+        if (cars[index].getPosition().y > OFFSCREEN_Y) {
+            // This car left the screen: put a fresh one back at a safe spot.
+            Position p = generateSafeStartPosition();
+            cars[index] = Car(nextCarId);
+            nextCarId++;
+            cars[index].setLane(p.lane);
+            cars[index].setY(p.y);
         }
-        removeOffscreenCarsUnlocked();
 
         carsMutex.unlock();
         std::this_thread::sleep_for(std::chrono::milliseconds(TICK_MS));

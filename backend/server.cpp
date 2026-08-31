@@ -9,11 +9,11 @@
 #include "protocol.h"
 #include "ws_server.h"
 
-// Entry point: build the world, start the update thread, and send a JSON
+// Entry point: build the world, start the car threads, and send a JSON
 // snapshot to every connected browser about 16 times per second.
 
 static const int DEFAULT_PORT = 5000;
-static const int DESIGN_NUMBER = 2;   // this branch runs design 2
+static const int DESIGN_NUMBER = 1;   // this branch runs design 1
 static const int BROADCAST_MS = 60;
 
 static volatile bool stopRequested = false;

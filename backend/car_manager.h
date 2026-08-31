@@ -6,10 +6,12 @@
 #include <mutex>
 #include "car.h"
 
-// Owns the enemy cars and the thread that moves them.
+// Owns the enemy cars and the threads that move them.
 //
-// Design 2 (single update thread): one thread iterates over every car each
-// tick, then spawns a wave and removes off-screen cars.
+// Design 1 (one thread per car): a fixed fleet of DESIGN1_CARS cars, each
+// with its own std::thread. When a car drives off screen its own thread
+// respawns it in a free lane (the "safe" one-at-a-time spawner). Adding a
+// car means adding a thread, which is why the fleet is kept small.
 //
 // server.cpp only calls start(), stop() and getCarStates().
 class CarManager {
@@ -17,21 +19,20 @@ public:
     CarManager();
     ~CarManager();
 
-    void start();   // create the update thread and begin moving cars
-    void stop();     // stop the thread and join it
+    void start();   // create one thread per car and begin moving them
+    void stop();     // stop the threads and join them
 
     std::vector<Car> getCarStates();  // a copy of every car, safe to read from another thread
 
 private:
     bool running;
 
-    std::vector<Car> cars;
+    std::vector<Car> cars;   // fixed size after seedInitialCars(): never resized
     std::mutex carsMutex;
     int nextCarId;
-    int waveCounter;
 
-    std::thread updateThread;
-    void updateLoop();
+    std::vector<std::thread> carThreads;
+    void oneCarLoop(int index);   // one per car: moves cars[index], respawns it when off screen
 
     void seedInitialCars();
 
@@ -44,10 +45,8 @@ private:
     bool laneHasRoom(const Car& c, int lane);
     bool wouldCreateWallUnlocked(int excludeCarId, int lane, int yBand);
 
-    // Wave spawning + cleanup.
-    bool laneIsFreeAtTop(int lane);
-    void spawnWaveUnlocked();
-    void removeOffscreenCarsUnlocked();
+    // Design 1 spawner: pick a lane with room at the top for a fresh car.
+    Position generateSafeStartPosition();
 };
 
 #endif
