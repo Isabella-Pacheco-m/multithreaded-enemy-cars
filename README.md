@@ -1,72 +1,100 @@
-# Enemy Cars Threading Project
+# Enemy Cars — Multi-threading & Shared-Memory (MP1_2026)
 
-## Overview
+A client–server "Enemy Cars" game for the Parallel Programming micro-project.
+The **C++ backend** generates enemy cars and moves them with threads; the
+**PixiJS frontend** only draws them and runs the local player + score.
 
-This is a micro project designed to teach parallel programming students how to use threads (std::thread or pthread) in a client-server architecture.
+```
+backend (C++ threads)  --  ws://localhost:5000  -->  frontend (PixiJS)
+  spawns + moves enemy cars      JSON snapshots       draws them, local player + collision
+```
 
-The objective is to implement a system where enemy cars are generated and their positions are updated asynchronously using threads. The backend server is responsible for generating movement data, while the frontend displays the enemy cars and applies the received positions.
+**This branch runs one threading design.** Each design lives on its own branch
+(`main` = design 2). See *Branch layout* below.
 
-The project focuses on the practical application of parallel programming concepts such as thread creation, task decomposition, synchronization, and communication between concurrent components.
-
-By completing this project, students will learn how to:
-
-- Create and manage parallel execution using: C++ std::thread or POSIX pthread
-- Decompose a problem into independent tasks.
-- Design thread-based solutions for real-time simulations.
-- Manage shared data between threads.
-
-## Technologies
-
-Backend
-- C++
-- POSIX Threads (pthread) or C++ Threads (std::thread)
-- Socket Programming
-- Concurrent Programming Concepts
-
-Frontend
-- JavaScript
-- HTML5 Canvas / PixiJS
-
-Infrastructure
-- Docker
-- Docker Compose
-
-## Start the application
-
-Build and execute both services:
+## Run it
 
 ```bash
 docker compose up --build
 ```
 
-Services:
+- Frontend: <http://localhost:8080>
+  - LEFT / RIGHT change lane, UP / DOWN move, SPACE to restart
+  - the panel top-left shows which threading model this branch is running
+- Backend: `ws://localhost:5000`
 
-Frontend:
-http://localhost:8080
+> If port 5000 is busy on your host, change the backend port in `docker-compose.yml`
+> (e.g. `"5050:5000"`) and `GameConfig.BACKEND_URL` in `frontend/scripts/config.js`.
 
-Backend:
-wss://localhost:5000
+### Backend without Docker
 
-## General Assignment Tasks
+```bash
+cd backend
+g++ -std=c++17 -O2 server.cpp car.cpp car_manager.cpp ws_server.cpp -o server -pthread
+PORT=5000 ./server
+wscat -c ws://localhost:5000     # watch the JSON frames (npm i -g wscat)
+```
 
-Students must implement a parallel solution where enemy car movement is handled by threads.
+## Files
 
-The solution must:
+### Backend (`backend/`)
 
-- Create worker threads.
-- Assign movement tasks to threads.
-- Update enemy positions concurrently.
-- Send updated states to the frontend.
+| File | Role | Same on every branch? |
+|------|------|-----------------------|
+| `car.h` / `car.cpp` | one enemy car: position + movement rules (`move`, `proposeLane`) | yes |
+| `car_manager.h` / `car_manager.cpp` | owns the `cars` vector and the thread(s); the shared per-car logic is identical, the threading model is what changes | threading part differs |
+| `protocol.h` | builds the JSON snapshot line | yes |
+| `ws_server.h` / `ws_server.cpp` | minimal WebSocket server (server→client text only) | yes |
+| `server.cpp` | `main`: build the world, `manager.start()`, broadcast a snapshot ~16×/s; `DESIGN_NUMBER` is a constant used only for the JSON `design` field | `DESIGN_NUMBER` differs |
 
-More details in course assignment
+`server.cpp` only calls `CarManager::start()`, `stop()` and `getCarStates()`.
 
-## Submision
+Wire format (one text frame ~every 60 ms):
 
-- Students must create a personal fork of the project repository.
-- Send PDF report with
-    - A short description of your implementation.
-    - The threading approach used.
-    - Any synchronization mechanisms implemented.
-    - Testing results.
+```json
+{"tick":1234,"design":2,"cars":[{"id":7,"lane":1,"y":320,"variant":3}]}
+```
 
-This project connects theoretical concepts from parallel programming with a practical simulation environment.
+`lane` ∈ {0,1,2}; `y` in screen pixels; `variant` = `CarVariant` (0..4);
+`design` is this branch's number (for the frontend panel).
+
+### Shared per-car logic (identical on all branches)
+
+In `car_manager.cpp`: `stepCarUnlocked` (move + maybe change lane), `carAheadTooClose`
+(gap in each lane, no rear-end crashes), `laneHasRoom`, `isTopmostInBand`,
+`wouldCreateWallUnlocked` (a car in a band where all 3 lanes are taken holds a tick if it
+is the one furthest back, so a gap always stays open). `proposeLane` (in `car.cpp`) only
+moves one lane over, only above `MERGE_ZONE_Y`.
+
+### Frontend (`frontend/`)
+
+- `network.js` — `CarNetwork`: WebSocket client, keeps the latest snapshot.
+- `car.js` — `EnemyCar`: draws a car; `applyServer(x,y)` + `interpolate()` slides it
+  toward the backend position. `laneToX(lane)` in `game.js` turns a lane index into pixels.
+- `game.js` — start / game-over screens, the player (locked to a lane, snaps left/right),
+  collision with the player, score (+1 per car that leaves the screen), 1.5 s spawn
+  protection at the start of a round, and the read-only design panel.
+
+No power-ups. Player movement, collision and score are all local.
+
+## Branch layout
+
+| Branch | Threading model | Spawner |
+|--------|-----------------|---------|
+| `diseno-1` | one `std::thread` per car, fixed fleet, each respawns its own car | safe: one car at a time in a free lane |
+| `main` / `diseno-2` | one thread updates every car | wave: up to 2 lanes, one left open |
+| `diseno-3` | one thread per car color (5); color 0 also spawns/cleans | wave |
+| `diseno-4` | pool of worker threads take car ids from a `std::queue` + a scheduler thread | wave |
+
+Each branch keeps `car.{h,cpp}` and the shared per-car logic; only the threading part of
+`car_manager.{h,cpp}` and `DESIGN_NUMBER` in `server.cpp` change. Fix a shared bug on one
+branch, then `git cherry-pick` it to the others. For the report: `git checkout diseno-N`,
+build, test, record.
+
+## Report checklist (MP1_2026)
+
+1. Can it use multiple cores? (1 & 4 yes; 2 & 3 serialise on `carsMutex`.)
+2. How easy is it to add cars / how independent is each car?
+3. What happens with thousands of cars? (1 = one thread each, collapses; 4 degrades; 2/3 bounded.)
+4. Shared variables and where a race could happen? (`cars`, `nextCarId`, `waveCounter`; the queue in 4.)
+5. Data structures per design? (see the table.)

@@ -51,24 +51,45 @@ class Car {
   }
 }
 
+// Backend variant index (Blue=0, Green=1, Pink=2, Red=3, White=4) to texture name.
+const VARIANT_TEXTURE = ['enemy2', 'enemy3', 'enemy4', 'enemy1', 'enemy5'];
+
 /**
- * Enemy Car class
- * Randomly selects a sprite and spawns at specified lane positions
+ * Enemy Car
+ * The backend decides where every enemy car is. This class just draws one
+ * and smooths the motion between backend messages.
  */
 class EnemyCar extends Car {
-  constructor(app, boundLeft, boundRight, boundBottom, speed) {
-    // Get a random enemy sprite
-    const texture = app.loader.resources[`enemy${randomBetween(1, 5)}`].texture;
+  constructor(app, boundLeft, boundRight, boundBottom, speed, variantIndex = 0) {
+    const name = VARIANT_TEXTURE[variantIndex] || 'enemy1';
+    const texture = app.loader.resources[name].texture;
     super(app, texture, boundLeft, boundRight, boundBottom, speed);
+
+    this.serverId = null;
+    this.targetX = null;
+    this.targetY = null;
+    this.placed = false;
   }
 
-  invoke(lanesQ, lanesPosition) {
-    // const whichLane = randomBetween(1, lanesQ);  // Randomly select a lane
-    // const laneToPushEnemy = lanesPosition[whichLane - 1]; // Get the position of the selected lane
-    // this.setPosition(laneToPushEnemy.x, -this.sprite.height);
+  // New position from the backend, in screen pixels.
+  applyServer(x, y) {
+    this.targetX = x;
+    this.targetY = y;
 
-    this.setPosition(290, -30); // Set a fixed position for testing purposes
-    
+    if (!this.placed) {
+      // New cars enter from just above the top; if we joined late, start where the car is.
+      const startY = y < 40 ? -this.sprite.height : y;
+      this.setPosition(x, startY);
+      this.placed = true;
+    }
+  }
+
+  // Slide quickly toward the backend lane (a lane change, not a teleport) and
+  // ease down in y between messages.
+  interpolate() {
+    if (this.targetX === null) return;
+    this.sprite.x += (this.targetX - this.sprite.x) * 0.5;
+    this.sprite.y += (this.targetY - this.sprite.y) * 0.25;
   }
 }
 

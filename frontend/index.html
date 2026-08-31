@@ -8,11 +8,19 @@
 		<script src="scripts/config.js"></script>
 		<script src="scripts/keyboard.js"></script>
 		<script src="scripts/audio.js"></script>
+		<script src="scripts/network.js"></script>
 		<script src="scripts/car.js"></script>
 		<script src="scripts/background.js"></script>
 		<script src="scripts/game.js"></script>
 	</head>
 	<body>
+		<div id="designbar">
+			<div class="title">THREADING MODEL</div>
+			<div class="opt" data-design="1"><span class="num">1</span> Thread per car</div>
+			<div class="opt" data-design="2"><span class="num">2</span> Single thread</div>
+			<div class="opt" data-design="3"><span class="num">3</span> Thread per color</div>
+			<div class="opt" data-design="4"><span class="num">4</span> Pool + queue</div>
+		</div>
 		<div id="game"></div>
 	</body>
 </html>
